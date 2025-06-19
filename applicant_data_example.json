@@ -1,0 +1,38 @@
+{
+    "first_name": "",
+    "last_name" : "",
+    "email": "",
+    "phone": "",
+    "Address":{
+      "Appartment_No./House" : "Heyell No",
+      "Street/Area" : "I am not telling you that either",
+      "City": "",
+      "Country": ""
+    },
+    "Gender": "",
+    "Sexuality": "",
+    "Nationality": "",
+    "Race":"",
+    "Do_I_Identify_as_any_type_of_minority": "",
+    "Do_I_feel_underrepresented": "",
+    "education": [
+      {
+        "institution": "",
+        "degree": "",
+        "graduation_year" : "",
+        "program_start": "",
+        "program_end": ""
+      }
+    ],
+    "work_experience": [
+      {
+        "company": "",
+        "role": "",
+        "start": "",
+        "end" : ""
+      }
+    ],
+    "resume_file": "",
+    "cover_letter_file": ""
+  }
+  

@@ -1,0 +1,33 @@
+
+# Byte-compiled / optimized / DLL files
+__pycache__
+*.py[cod]
+*$py.class
+
+# Virtual environment
+job_agent_env
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# C extensions
+*.so
+
+# environment variables
+.env
+
+# Json Data for LLMS
+applicant_credentials.json
+applicant_data.json
+applicant_preferences.json
+
+
+# Logs and local data
+*.log
+*.sqlite3
+*.db
+
+
+# MacOS and Linux system files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,2 @@
+# Intention
+This is an attempt at building a Job application Agent, which would help people in hunting and applying for jobs, allowing them to keep their sanity by offsetting the soul draining task of visiting multiple job posting sites, searching , applying filters and then going through the application process involving filling up text fields, selecting options, tailoring and uploading Resume/Cover Letter all for multiple suitable job listings. We let an AI Agent handle all that tasks autonomously for the applicant.
