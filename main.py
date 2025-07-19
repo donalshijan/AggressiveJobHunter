@@ -100,7 +100,7 @@ def main() -> None:
                 instructions = login_agent.ask(dom_html, {
                     "site" : site,
                     "phase": "login",
-                    "applicant_credentials": applicant_credentials
+                    "job_seeker_credentials": applicant_credentials
                 })
                 
                 if not instructions:
@@ -138,7 +138,7 @@ def main() -> None:
             logger.info("[Main] (Search Phase) Asking LLM for next action")
             search_instructions = search_agent.ask(dom_html, {
                 "phase": "search",
-                "applicant_preferences": applicant_preferences
+                "job_seeker_preferences": applicant_preferences
             })
 
             if not search_instructions:

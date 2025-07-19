@@ -1,0 +1,11 @@
+#control-panel {
+    display: flex;
+    flex-direction: column;
+    padding: 10px;
+    width: 200px;
+  }
+  button {
+    margin: 5px 0;
+    padding: 10px;
+    font-weight: bold;
+  }

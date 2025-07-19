@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Job Application Data Capture Tool",
+  "version": "1.0",
+  "description": "Capture DOM, screenshot, and user actions for job application pages.",
+  "permissions": ["scripting", "activeTab","tabs"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon.png",
+      "48": "icons/icon.png",
+      "128": "icons/icon.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["toast.js","content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "data/applicant_credentials.json",
+        "data/applicant_data.json",
+        "data/applicant_preferences.json"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
