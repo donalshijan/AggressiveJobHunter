@@ -1,45 +1,106 @@
+//injection guard
+// Immediately Invoked + Exposable Global Re-initializer
+window.reInitLocalGlobals = (function () {
+  return function reInitLocalGlobals() {
+    if (!window.__DataCaptureExtension) {
+      window.__DataCaptureExtension = true;
+      window.__DataCaptureExtensionGlobals__ = {
+        rawActions: [],
+        currentUIDToSelectorMap: new Map(),
+        currentSelectorToUIDMap: new Map(),
+        currentInteractables: [],
+        debounceTimer: null,
+        lastScrollY: window.scrollY,
+        lastScrollCapturedY: window.scrollY,
+        scrollables: [],
+        scrollHandlers: new WeakMap(),
+        INTERACTABLE_TAGS: ["input", "button", "select", "textarea", "a"],
+        FLATTEN_SEPARATOR: '->>',
+        debouncedWindowScrollHandler: null,
+        listenersAttached : false,
+        controlsInjected : false,
+      };
+      window.removeManualControlButtons = removeManualControlButtons;
+  }
+    console.log("🔁 [reInitLocalGlobals] Local globals reinitialized");
+  };
+})();
 
-let isCapturing = false;
-let rawActions = [];
-let enrichedLearnableDOMDataAndInstructionsForInteraction = [];
+function getCurrentTabId() {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ action: "GET_CURRENT_TAB_ID" }, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(chrome.runtime.lastError);
+      } else {
+        resolve(response?.tabId);
+      }
+    });
+  });
+}
 
-let currentUIDToSelectorMap = new Map();
-let currentSelectorToUIDMap = new Map();
-let currentInteractables = [];
+async function registerActiveCaptureTab() {
+  const { activeCaptureTabs = [] } = await getStorage(["activeCaptureTabs"]);
+  const tabId = await getCurrentTabId(); // Implement using chrome.runtime.sendMessage to background
+  if (!activeCaptureTabs.includes(tabId)) {
+    await setStorage({ activeCaptureTabs: [...activeCaptureTabs, tabId] });
+  }
+}
 
-let debounceTimer = null;
-let lastScrollY = window.scrollY;
-let lastScrollCapturedY = window.scrollY;
+function cleanupCaptureGlobals() {
+  // delete window.__DataCaptureExtension;
+  delete window.__DataCaptureExtensionGlobals__;
+  window.__DataCaptureExtension = false;
+}
 
-let scrollables = [];
-const scrollHandlers = new WeakMap();
+function getStorage(keys) {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(keys, resolve);
+  });
+}
 
-const INTERACTABLE_TAGS = ["input", "button", "select", "textarea", "a"];
+async function safeGetStorage(keys, retries = 3, delay = 200) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await getStorage(keys);
+    } catch (e) {
+      if (i === retries - 1) throw e;
+      await new Promise(res => setTimeout(res, delay));
+    }
+  }
+}
 
-const FLATTEN_SEPARATOR = '->>';
+function setStorage(obj, callback = null) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set(obj, () => {
+      if (chrome.runtime.lastError) {
+        return reject(chrome.runtime.lastError);
+      }
 
-let reverseValueToPlaceholder = {};
+      if (typeof callback === "function") {
+        callback(); // Optional callback if user passed one
+      }
 
-let isPausedForManualIntervention = null;
+      resolve();
+    });
+  });
+}
 
-// Create debounced scroll handler once
-let debouncedWindowScrollHandler = null;
 
 function flattenObject(obj, parentKey = "", result = {}) {
   for (let key in obj) {
     if (!obj.hasOwnProperty(key)) continue;
 
     const value = obj[key];
-    const newKey = parentKey ? `${parentKey}${FLATTEN_SEPARATOR}${key}` : key;
+    const newKey = parentKey ? `${parentKey}${window.__DataCaptureExtensionGlobals__.FLATTEN_SEPARATOR}${key}` : key;
 
     if (typeof value === "object" && value !== null && !Array.isArray(value)) {
       flattenObject(value, newKey, result);
     } else if (Array.isArray(value)) {
       value.forEach((item, index) => {
         if (typeof item === "object" && item !== null) {
-          flattenObject(item, `${newKey}${FLATTEN_SEPARATOR}${index}`, result);
+          flattenObject(item, `${newKey}${window.__DataCaptureExtensionGlobals__.FLATTEN_SEPARATOR}${index}`, result);
         } else {
-          result[`${newKey}${FLATTEN_SEPARATOR}${index}`] = item;
+          result[`${newKey}${window.__DataCaptureExtensionGlobals__.FLATTEN_SEPARATOR}${index}`] = item;
         }
       });
     } else {
@@ -50,7 +111,7 @@ function flattenObject(obj, parentKey = "", result = {}) {
 }
 
 async function buildReverseMap(phase) {
-  reverseValueToPlaceholder = {}; // reset previous map
+  const reverseValueToPlaceholderMap = {}; // reset previous map
 
   const phaseToFile = {
     signin: "applicant_credentials.json",
@@ -60,7 +121,7 @@ async function buildReverseMap(phase) {
 
   const file = phaseToFile[phase];
   if (!file) {
-    // console.warn(`⚠️ Unknown capture phase: "${phase}"`);
+    console.warn(`⚠️ Unknown capture phase: "${phase}"`);
     showToast(`⚠️ Unknown capture phase: "${phase}"`,'warning');
     return;
   }
@@ -73,61 +134,84 @@ async function buildReverseMap(phase) {
 
     for (const [key, value] of Object.entries(flatJson)) {
       if (typeof value === "string") {
-        if (!reverseValueToPlaceholder[value]) {
-          reverseValueToPlaceholder[value] = [];
+        if (!reverseValueToPlaceholderMap[value]) {
+          reverseValueToPlaceholderMap[value] = [];
         }
       
         const keyPlaceholder = `$${key}`;
-        if (!reverseValueToPlaceholder[value].includes(keyPlaceholder)) {
-          reverseValueToPlaceholder[value].push(keyPlaceholder);
+        if (!reverseValueToPlaceholderMap[value].includes(keyPlaceholder)) {
+          reverseValueToPlaceholderMap[value].push(keyPlaceholder);
         }
       }
     }
 
-    // console.log(`✅ Reverse map built for phase "${phase}":`, reverseValueToPlaceholder);
+    // ✅ Save to chrome.storage.local
+    await setStorage({ reverseValueToPlaceholder: reverseValueToPlaceholderMap });
+    const { reverseValueToPlaceholder } = await getStorage(["reverseValueToPlaceholder"]);
+    console.log(`✅ Reverse map built for phase "${phase}":`, reverseValueToPlaceholder);
     showToast(`✅ Reverse map built for phase: "${phase}"`,'success');
   } catch (e) {
-    // console.error(`❌ Failed to load ${file}:`, e);
+    console.error(`❌ Failed to load ${file}:`, e);
     showToast(`❌ Failed to load ${file}: ${e}`, 'error');
   }
 }
 
-window.startCapture = async (phase = "unspecified") => {
-  window.capturePhase = phase;
-  await buildReverseMap(window.capturePhase);
-  isCapturing = true;
-  rawActions = [];
-  enrichedLearnableDOMDataAndInstructionsForInteraction = [];
+function attachInteractionListeners() {
+
   document.addEventListener("click", logClick, true);
   document.addEventListener("change", logInput, true);
-  debouncedWindowScrollHandler = debounce((e) => logScroll(e, null), 1000);
-  window.addEventListener("scroll", debouncedWindowScrollHandler, { passive: true });
-  lastScrollY = window.scrollY;
-  lastScrollCapturedY = window.scrollY;
+  window.__DataCaptureExtensionGlobals__.debouncedWindowScrollHandler = debounce((e) => logScroll(e, null), 1000);
+  window.addEventListener("scroll", window.__DataCaptureExtensionGlobals__.debouncedWindowScrollHandler, { passive: true });
+  window.__DataCaptureExtensionGlobals__.lastScrollY = window.scrollY;
+  window.__DataCaptureExtensionGlobals__.lastScrollCapturedY = window.scrollY;
+  window.__DataCaptureExtensionGlobals__.listenersAttached = true;
 
-  isPausedForManualIntervention = false;
+}
 
-  injectManualControlButtons()
 
-  observeNavigationAndSubmissions();
+window.startCapture = async (phase = "unspecified") => {
+  if(!window.__DataCaptureExtension) {
+    window.reInitLocalGlobals();
+  }
+  if(!window.__DataCaptureExtensionGlobals__.listenersAttached){
+    attachInteractionListeners();
+  }
+  const {isCapturing} = await getStorage(["isCapturing"]);
+  if(!isCapturing) {
+    await buildReverseMap(phase);
+    await setStorage({ isCapturing: true , capturePhase : phase ,isPausedForManualIntervention : false , enrichedLearnableDOMDataAndInstructionsForInteraction : []});
+  }
+
+  window.__DataCaptureExtensionGlobals__.rawActions = [];
+
+  if(!window.__DataCaptureExtensionGlobals__.controlsInjected) { 
+    injectManualControlButtons();
+    await registerActiveCaptureTab();
+  }
+  // observeNavigationAndSubmissions();
+  setTimeout(() => observeNavigationAndSubmissions(), 1000);
 
   extractVisibleInteractablesAndBuildUidMapping();
 
-
-  // console.log("✅ Capture started");
-  showToast("✅ Capture started",'info');
+  if(!isCapturing){
+    console.log("✅ Capture started");
+    showToast("✅ Capture started",'info');
+  }
+  else{
+    console.log("✅ Capture resumes from where was left ");
+    showToast("✅ Capture resumes from where was left ",'info');
+  }
 };
 
-window.stopCapture = () => {
+window.stopCapture = async () => {
+  const {isCapturing,enrichedLearnableDOMDataAndInstructionsForInteraction} = await getStorage(["isCapturing","enrichedLearnableDOMDataAndInstructionsForInteraction"]);
   if (!isCapturing) return;
-  isCapturing = false;
 
   document.removeEventListener("click", logClick, true);
   document.removeEventListener("change", logInput, true);
-  window.removeEventListener("scroll", debouncedWindowScrollHandler);
+  window.removeEventListener("scroll", window.__DataCaptureExtensionGlobals__.debouncedWindowScrollHandler);
 
-  pushCurrentPageCapture(); // Push before exporting
-  removeManualControlButtons();
+  await pushCurrentPageCapture(); // Push before exporting
 
   const blob = new Blob([
     JSON.stringify({ pages: enrichedLearnableDOMDataAndInstructionsForInteraction }, null, 2)
@@ -139,26 +223,40 @@ window.stopCapture = () => {
   a.download = `instruction-${Date.now()}.json`;
   a.click();
 
-  // console.log("📦 Final data saved");
+  console.log("📦 Final data saved");
   showToast("📦 Final data saved",'success');
-  generatePhaseJsonFilesFromReverseMap();
+  await generatePhaseJsonFilesFromReverseMap();
+
+   // ✅ Now update global state
+  await setStorage({ isCapturing: false, capturePhase: null }, () => {
+    console.log("⛔️ isCapturing set to false");
+  });
+  
+  removeManualControlButtons();
+  try {
+    chrome.runtime.sendMessage({ action: "CLEANUP_CONTROLS_ON_ALL_TABS" });
+  } catch (err) {
+    console.warn(`Failed to send cleanup to background:`, err);
+  }
+  cleanupCaptureGlobals();
 };
 
-function generatePhaseJsonFilesFromReverseMap() {
+async function generatePhaseJsonFilesFromReverseMap() {
   const phaseToPrefix = {
     signin: "credentials",
     search: "preferences",
     application: "data"
   };
-  const suffix = phaseToPrefix[window.capturePhase];
+  const {capturePhase} = await getStorage(["capturePhase"]);
+  const suffix = phaseToPrefix[capturePhase];
   if (!suffix) {
-    // console.warn("⚠️ Unknown capture phase. Skipping export.");
+    console.warn("⚠️ Unknown capture phase. Skipping export.");
     showToast("⚠️ Unknown capture phase. Skipping export.",'warning');
     return;
   }
 
   const flat = {};
-
+  const { reverseValueToPlaceholder } = await getStorage(["reverseValueToPlaceholder"]);
   for (const [value, placeholders] of Object.entries(reverseValueToPlaceholder)) {
     for (const placeholder of placeholders) {
       // const match = placeholder.match(/^\$(\w+)$/); // extract field name like $email
@@ -170,11 +268,11 @@ function generatePhaseJsonFilesFromReverseMap() {
     }
   }
 
-  // console.log("flat:",flat);
+  console.log("flat:",flat);
   // Rebuild nested structure
   const nested = unflattenObject(flat);
 
-  // console.log('nested:',nested);
+  console.log('nested:',nested);
   // Download the relevant one based on current phase
   const fileName = `applicant_${suffix}.json`;
   const blob = new Blob(
@@ -188,7 +286,7 @@ function generatePhaseJsonFilesFromReverseMap() {
   a.download = fileName;
   a.click();
 
-  // console.log(`💾 Exported ${fileName}`);
+  console.log(`💾 Exported ${fileName}`);
   showToast(`💾 Exported ${fileName}`,'success');
 }
 
@@ -196,7 +294,7 @@ function unflattenObject(flat) {
   const result = {};
 
   for (const flatKey in flat) {
-    const keys = flatKey.split(FLATTEN_SEPARATOR);
+    const keys = flatKey.split(window.__DataCaptureExtensionGlobals__.FLATTEN_SEPARATOR);
     let current = result;
 
     keys.forEach((key, index) => {
@@ -224,35 +322,47 @@ function unflattenObject(flat) {
 
 
 
-function logClick(e) {
+async function logClick(e) {
+  const {isCapturing,isPausedForManualIntervention} = await getStorage(["isCapturing","isPausedForManualIntervention"]);
   if (!isCapturing) return;
   if (isPausedForManualIntervention) return;
   const selector = getDomPath(e.target);
-  const uid = currentSelectorToUIDMap.get(selector);
+  const uid = window.__DataCaptureExtensionGlobals__.currentSelectorToUIDMap.get(selector);
   if (!uid) return;
 
-  rawActions.push({ action: "click", id : uid,  });
+  window.__DataCaptureExtensionGlobals__.rawActions.push({ action: "click", id : uid,  });
+  console.log("click logged");
   showToast("click captured",'info');
 }
 
-function logInput(e) {
+async function logInput(e) {
+  const {isCapturing,isPausedForManualIntervention} = await getStorage(["isCapturing","isPausedForManualIntervention"]);
   if (!isCapturing) return;
   if (isPausedForManualIntervention) return;
   const selector = getDomPath(e.target);
-  const uid = currentSelectorToUIDMap.get(selector);
+  const uid = window.__DataCaptureExtensionGlobals__.currentSelectorToUIDMap.get(selector);
   if (!uid) return;
   let value = e.target.value;
-  let placeholder = reverseValueToPlaceholder[value];
+  const { reverseValueToPlaceholder } = await getStorage(["reverseValueToPlaceholder"]);
+  let placeholder = reverseValueToPlaceholder?.[value];
   if (!placeholder) {
     // Create new key name from the input's name or placeholder
     const keyGuess = inferKeyName(e.target);
     placeholder = `$${keyGuess}`;
     
-    // Update reverse map
-    reverseValueToPlaceholder[value] = placeholder;
+    // old way to Update reverse map
+    // reverseValueToPlaceholder[value] = placeholder;
+
+    // new way to update reverse map
+    const updatedMap = {
+      ...(reverseValueToPlaceholder || {}),
+      [value]: placeholder
+    };
+    await setStorage({ reverseValueToPlaceholder: updatedMap });
+
   }
 
-  rawActions.push({
+  window.__DataCaptureExtensionGlobals__.rawActions.push({
     action: "fill",
     id : uid,
     value: placeholder,
@@ -260,21 +370,22 @@ function logInput(e) {
   showToast("input captured",'info');
 }
 
-function logScroll(e, el = null) {
+async function logScroll(e, el = null) {
+  const {isCapturing,isPausedForManualIntervention} = await getStorage(["isCapturing","isPausedForManualIntervention"]);
   if (!isCapturing) return;
   if (isPausedForManualIntervention) return;
   const isWindowScroll = !el;
   const target = isWindowScroll ? window : el;
   const scrollTop = isWindowScroll ? window.scrollY : el.scrollTop;
-  const last = isWindowScroll ? lastScrollCapturedY : (el._lastScrollTop || 0);
+  const last = isWindowScroll ? window.__DataCaptureExtensionGlobals__.lastScrollCapturedY : (el._lastScrollTop || 0);
   const deltaY = scrollTop - last;
 
   if (Math.abs(deltaY) < 10) return;
 
   const selector = isWindowScroll ? "window" : getDomPath(el);
-  const uid = isWindowScroll ? "window" : currentSelectorToUIDMap.get(selector) || "unknown";
+  const uid = isWindowScroll ? "window" : window.__DataCaptureExtensionGlobals__.currentSelectorToUIDMap.get(selector) || "unknown";
 
-  rawActions.push({
+  window.__DataCaptureExtensionGlobals__.rawActions.push({
     action: "scroll",
     deltaY,
     scrollTo: scrollTop,
@@ -284,12 +395,12 @@ function logScroll(e, el = null) {
 
   // Update scroll positions
   if (isWindowScroll) {
-    lastScrollCapturedY = scrollTop;
+    window.__DataCaptureExtensionGlobals__.lastScrollCapturedY = scrollTop;
   } else {
     el._lastScrollTop = scrollTop;
   }
 
-  pushCurrentPageCapture();
+  await pushCurrentPageCapture();
   console.log("🌀 Scroll logged:", {
     source: isWindowScroll ? "window" : "element",
     uid,
@@ -337,11 +448,11 @@ function throttle(fn, limit) {
 }
 
 function attachScrollListeners() {
-  scrollables.forEach(el => {
-    const handler = scrollHandlers.get(el);
+  window.__DataCaptureExtensionGlobals__.scrollables.forEach(el => {
+    const handler = window.__DataCaptureExtensionGlobals__.scrollHandlers.get(el);
     if (handler) el.removeEventListener('scroll', handler);
   });
-  scrollables.length = 0;
+  window.__DataCaptureExtensionGlobals__.scrollables.length = 0;
   const newScrollables = Array.from(document.querySelectorAll('*')).filter(el => {
     const style = getComputedStyle(el);
     return ['auto', 'scroll'].includes(style.overflowY) && el.scrollHeight > el.clientHeight;
@@ -349,30 +460,30 @@ function attachScrollListeners() {
 
   newScrollables.forEach(el => {
     const handler = debounce((e) => logScroll(e, el), 300);
-    scrollHandlers.set(el, handler);
+    window.__DataCaptureExtensionGlobals__.scrollHandlers.set(el, handler);
     el.addEventListener('scroll', handler, { passive: true });
-    scrollables.push(el);
+    window.__DataCaptureExtensionGlobals__.scrollables.push(el);
   });
 
-  // console.log("✅ Attached scroll listeners:", scrollables.length);
-  showToast(`✅ Attached scroll listeners: ${scrollables.length}`, 'success');
+  console.log("✅ Attached scroll listeners:", window.__DataCaptureExtensionGlobals__.scrollables.length);
+  showToast(`✅ Attached scroll listeners: ${window.__DataCaptureExtensionGlobals__.scrollables.length}`, 'success');
 }
 
 function detachScrollListeners() {
-  scrollables.forEach(el => {
-    const handler = scrollHandlers.get(el);
+  window.__DataCaptureExtensionGlobals__.scrollables.forEach(el => {
+    const handler = window.__DataCaptureExtensionGlobals__.scrollHandlers.get(el);
     if (handler) el.removeEventListener('scroll', handler);
-    scrollHandlers.delete(el);
+    window.__DataCaptureExtensionGlobals__.scrollHandlers.delete(el);
   });
-  scrollables.length = 0;
-  scrollables = [];
+  window.__DataCaptureExtensionGlobals__.scrollables.length = 0;
+  window.__DataCaptureExtensionGlobals__.scrollables = [];
 }
 
 function extractVisibleInteractablesAndBuildUidMapping() {
   attachScrollListeners();
-  currentUIDToSelectorMap.clear();
-  currentSelectorToUIDMap.clear();
-  currentInteractables = [];
+  window.__DataCaptureExtensionGlobals__.currentUIDToSelectorMap.clear();
+  window.__DataCaptureExtensionGlobals__.currentSelectorToUIDMap.clear();
+  window.__DataCaptureExtensionGlobals__.currentInteractables = [];
 
   const allElements = document.querySelectorAll("*");
   let uidCounter = 0;
@@ -390,10 +501,10 @@ function extractVisibleInteractablesAndBuildUidMapping() {
     const selector = getDomPath(el);
     const uid = `el_${uidCounter++}`;
 
-    currentUIDToSelectorMap.set(uid, selector);
-    currentSelectorToUIDMap.set(selector, uid);
+    window.__DataCaptureExtensionGlobals__.currentUIDToSelectorMap.set(uid, selector);
+    window.__DataCaptureExtensionGlobals__.currentSelectorToUIDMap.set(selector, uid);
 
-    currentInteractables.push({
+    window.__DataCaptureExtensionGlobals__.currentInteractables.push({
       uid,
       tag: el.tagName.toLowerCase(),
       text: (el.innerText || el.value || "").trim(),
@@ -412,13 +523,13 @@ function extractVisibleInteractablesAndBuildUidMapping() {
   });
 }
 
-function pushCurrentPageCapture() {
-  if (currentInteractables.length === 0) return;
+async function pushCurrentPageCapture() {
+  if (window.__DataCaptureExtensionGlobals__.currentInteractables.length === 0) return;
 
   const dedupedFills = {};
   const finalActions = [];
 
-  for (const act of rawActions) {
+  for (const act of window.__DataCaptureExtensionGlobals__.rawActions) {
     if (act.action === "fill") {
       dedupedFills[act.id] = act;
     } else {
@@ -429,32 +540,51 @@ function pushCurrentPageCapture() {
   finalActions.push(...Object.values(dedupedFills));
 
   if (finalActions.length === 0) {
-    // console.log("🟡 Skipping page capture (no actions)");
+    console.log("🟡 Skipping page capture (no actions)");
     showToast("🟡 Skipping page capture (no actions)",'info');
     return;
   }
+  
+  // old way to update
+  // const {capturePhase} = await getStorage(["capturePhase"]);
+  // enrichedLearnableDOMDataAndInstructionsForInteraction.push({
+  //   interactables: window.__DataCaptureExtensionGlobals__.currentInteractables,
+  //   phase: capturePhase,
+  //   scrollY: window.scrollY,
+  //   actions: finalActions
+  // });
 
-  enrichedLearnableDOMDataAndInstructionsForInteraction.push({
-    interactables: currentInteractables,
-    phase: window.capturePhase,
+  // new way to update
+  // Step 1: Get the current stored array (or empty if not set)
+  let { enrichedLearnableDOMDataAndInstructionsForInteraction = [] , capturePhase } = await getStorage(["enrichedLearnableDOMDataAndInstructionsForInteraction","capturePhase"]);
+
+  const newPageData = {
+    currentPageUrl : window.location.href,
+    interactables: window.__DataCaptureExtensionGlobals__.currentInteractables,
+    phase: capturePhase,
     scrollY: window.scrollY,
     actions: finalActions
-  });
-
-  rawActions = [];
-  currentInteractables = [];
+  };
+  // Step 2: Push the new object
+  enrichedLearnableDOMDataAndInstructionsForInteraction.push(newPageData);
+  // Step 3: Save it back to storage
+  await setStorage({ enrichedLearnableDOMDataAndInstructionsForInteraction });
+  window.__DataCaptureExtensionGlobals__.rawActions = [];
+  window.__DataCaptureExtensionGlobals__.currentInteractables = [];
 }
 
 function observeNavigationAndSubmissions() {
-  const observer = new MutationObserver((mutations) => {
+  const observer = new MutationObserver(async (mutations) => {
+    const {isCapturing,isPausedForManualIntervention} = await safeGetStorage(["isCapturing","isPausedForManualIntervention"]);
     if (isPausedForManualIntervention) return false;
     const hasNavigation = mutations.some(m => {
       if (m.target.closest?.("#job-agent-toast-container")) return false;
       m.type === "childList" || m.type === "attributes";
     });
+
     if (hasNavigation && isCapturing) {
-      clearTimeout(debounceTimer); // safe even if debounceTimer is null
-      debounceTimer = setTimeout(() => {
+      clearTimeout(window.__DataCaptureExtensionGlobals__.debounceTimer); // safe even if debounceTimer is null
+      window.__DataCaptureExtensionGlobals__.debounceTimer = setTimeout(() => {
         pushCurrentPageCapture();
         extractVisibleInteractablesAndBuildUidMapping();
       }, 500);
@@ -468,7 +598,8 @@ function observeNavigationAndSubmissions() {
   });
 
   // Also detect form submissions
-  document.addEventListener("submit", () => {
+  document.addEventListener("submit", async () => {
+    const {isCapturing} = await getStorage("isCapturing");
     if (isCapturing) {
       pushCurrentPageCapture();
       setTimeout(() => extractVisibleInteractablesAndBuildUidMapping(), 500);
@@ -480,7 +611,7 @@ function observeNavigationAndSubmissions() {
 
 function isElementInteractable(el) {
   const tag = el.tagName.toLowerCase();
-  if (INTERACTABLE_TAGS.includes(tag)) return true;
+  if (window.__DataCaptureExtensionGlobals__.INTERACTABLE_TAGS.includes(tag)) return true;
 
   const role = el.getAttribute("role");
   const tabindex = el.getAttribute("tabindex");
@@ -618,14 +749,16 @@ function injectManualControlButtons() {
   container.appendChild(interveneBtn);
   container.appendChild(continueBtn);
   document.body.appendChild(container);
+
+  window.__DataCaptureExtensionGlobals__.controlsInjected=true;
 }
 
-function pauseCaptureForManualInstruction() {
-  isPausedForManualIntervention = true;
+async function pauseCaptureForManualInstruction() {
+  await setStorage({isPausedForManualIntervention : true});
   showToast("✋ Capture paused for manual instruction", "info");
 
   // You can insert a blank instruction manually or wait for user to do something
-  rawActions.push({
+  window.__DataCaptureExtensionGlobals__.rawActions.push({
     action: "intervene",
     message: "manual intervention needed",
   });
@@ -634,8 +767,8 @@ function pauseCaptureForManualInstruction() {
 
 }
 
-function resumeCaptureAfterManualInstruction() {
-  isPausedForManualIntervention = false;
+async function resumeCaptureAfterManualInstruction() {
+  await setStorage({isPausedForManualIntervention : false});
 
   // extractVisibleInteractablesAndBuildUidMapping();
   showToast("▶️ Capture resumed", "success");
@@ -644,4 +777,5 @@ function resumeCaptureAfterManualInstruction() {
 function removeManualControlButtons() {
   const el = document.getElementById("manual-control-buttons");
   if (el) el.remove();
+  window.__DataCaptureExtensionGlobals__.controlsInjected=false;
 }

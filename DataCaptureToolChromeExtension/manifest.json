@@ -3,7 +3,7 @@
   "name": "Job Application Data Capture Tool",
   "version": "1.0",
   "description": "Capture DOM, screenshot, and user actions for job application pages.",
-  "permissions": ["scripting", "activeTab","tabs"],
+  "permissions": ["scripting", "activeTab","tabs","storage","webNavigation"],
   "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup.html",
@@ -19,7 +19,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["toast.js","content.js"],
+      "js": ["content.js","toast.js"],
       "run_at": "document_idle"
     }
   ],
